@@ -52,7 +52,7 @@ jobs:
           command -v docker > /dev/null || curl -fsSL https://get.docker.com | sudo sh
           
           aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }} | \
-            docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
+            sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
 
           cd /home/ubuntu
           sudo docker compose pull
