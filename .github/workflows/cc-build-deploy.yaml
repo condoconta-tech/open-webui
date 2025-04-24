@@ -57,3 +57,7 @@ jobs:
           cd /home/ubuntu
           sudo docker compose pull
           sudo docker compose up -d --remove-orphans
+
+          # Make sure ssl will work
+          sudo nginx -t
+          sudo systemctl reload nginx
