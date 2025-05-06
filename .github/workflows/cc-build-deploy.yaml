@@ -50,4 +50,6 @@ jobs:
             version: 'v3.13.1'
         - name: Deploy to Kubernetes
           run: |
-            helm upgrade open-webui -n open-webui --set image.tag=${{ github.sha }}
+            helm repo add open-webui https://open-webui.github.io/helm-charts
+            helm repo update
+            helm upgrade open-webui open-webui  -n open-webui --set image.tag=${{ github.sha }}
