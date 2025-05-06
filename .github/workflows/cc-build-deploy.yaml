@@ -6,7 +6,7 @@ on:
       - main
 
 jobs:
-  build-and-deploy:
+  build-image:
     runs-on: ubuntu-latest
 
     steps:
@@ -32,32 +32,22 @@ jobs:
       run: |
         docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
         docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-        echo "IMAGE=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_ENV        
-
-    - name: Deploy to EC2 via SSH
-      uses: appleboy/ssh-action@v1
-      with:
-        host: ${{ vars.EC2_SSH_HOST }}
-        username: ubuntu
-        key: ${{ secrets.EC2_SSH_KEY }}
-        script: |
-          #!/bin/bash
-          set -e
-          
-          # Install AWS CLI and Docker if not already present
-          command -v aws > /dev/null || sudo apt-get update && sudo apt-get install -y awscli
-          command -v docker > /dev/null || curl -fsSL https://get.docker.com | sudo sh
-          
-          aws ecr get-login-password --region ${{ secrets.AWS_DEFAULT_REGION }} | \
-            sudo docker login --username AWS --password-stdin ${{ steps.login-ecr.outputs.registry }}
-
-          cd /home/ubuntu
-          sudo docker compose pull
-          sudo docker compose up -d --remove-orphans
-
-          # Make sure ssl will work
-          sudo nginx -t
-          sudo systemctl reload nginx
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG     
+  deploy:
+    needs: build-image
+    runs-on: ubuntu-latest
+    steps:
+        - uses: actions/checkout@v4
+        - name: Configure AWS Credentials
+          uses: aws-actions/configure-aws-credentials@v4
+          with:
+            aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+            aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
+            aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        - run: aws eks update-kubeconfig --region us-east-1 --name ${{ vars.EKS_CLUSTER_NAME }}
+        - uses: azure/setup-helm@v4.3.0
+          with:
+            version: 'v3.13.1'
+        - name: Deploy to Kubernetes
+          run: |
+            helm upgrade open-webui -n open-webui --set image.tag=${{ github.sha }}
