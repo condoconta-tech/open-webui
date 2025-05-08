@@ -35,6 +35,7 @@ jobs:
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG     
   deploy:
     needs: build-image
+    environment: main
     runs-on: ubuntu-latest
     steps:
         - uses: actions/checkout@v4
@@ -52,4 +53,4 @@ jobs:
           run: |
             helm repo add open-webui https://open-webui.github.io/helm-charts
             helm repo update
-            helm upgrade open-webui open-webui/open-webui -n open-webui --set image.tag=${{ github.sha }}
+            helm upgrade open-webui open-webui/open-webui -f k8s/development/values.yml -n open-webui --set image.tag=${{ github.sha }} --set databaseUrl=${{ secrets.DATABASE_URL }}
