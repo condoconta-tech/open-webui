@@ -12,7 +12,7 @@ pipelines:
     size: 20Gi
 image:
   repository: '412781486721.dkr.ecr.us-east-1.amazonaws.com/open-webui'
-  tag: '18b631a115280c8279b7401b60a02ae60166d92a'
+  # tag: '18b631a115280c8279b7401b60a02ae60166d92a'
 nodeSelector:
   condoconta.node.type: webui
 databaseUrl: 'postgresql://ollama:ollama@localhost/ollama'
