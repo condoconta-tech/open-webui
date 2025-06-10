@@ -1,7 +1,9 @@
 ollama:
+  enabled: false
   nodeSelector: 
     condoconta.node.type: webui
 pipelines:
+  enabled: false
   nodeSelector:
     condoconta.node.type: webui
   persistence:
