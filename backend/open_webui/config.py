@@ -222,9 +222,10 @@ class PersistentConfig(Generic[T]):
 
 
 class AppConfig:
-    _state: dict[str, PersistentConfig]
     _redis: Union[redis.Redis, redis.cluster.RedisCluster] = None
     _redis_key_prefix: str
+
+    _state: dict[str, PersistentConfig]
 
     def __init__(
         self,
@@ -233,9 +234,8 @@ class AppConfig:
         redis_cluster: Optional[bool] = False,
         redis_key_prefix: str = "open-webui",
     ):
-        super().__setattr__("_state", {})
-        super().__setattr__("_redis_key_prefix", redis_key_prefix)
         if redis_url:
+            super().__setattr__("_redis_key_prefix", redis_key_prefix)
             super().__setattr__(
                 "_redis",
                 get_redis_connection(
@@ -245,6 +245,8 @@ class AppConfig:
                     decode_responses=True,
                 ),
             )
+
+        super().__setattr__("_state", {})
 
     def __setattr__(self, key, value):
         if isinstance(value, PersistentConfig):
@@ -313,7 +315,7 @@ JWT_EXPIRES_IN = PersistentConfig(
 ####################################
 
 ENABLE_OAUTH_PERSISTENT_CONFIG = (
-    os.environ.get("ENABLE_OAUTH_PERSISTENT_CONFIG", "True").lower() == "true"
+    os.environ.get("ENABLE_OAUTH_PERSISTENT_CONFIG", "False").lower() == "true"
 )
 
 ENABLE_OAUTH_SIGNUP = PersistentConfig(
@@ -510,7 +512,31 @@ OAUTH_EMAIL_CLAIM = PersistentConfig(
 OAUTH_GROUPS_CLAIM = PersistentConfig(
     "OAUTH_GROUPS_CLAIM",
     "oauth.oidc.group_claim",
-    os.environ.get("OAUTH_GROUP_CLAIM", "groups"),
+    os.environ.get("OAUTH_GROUPS_CLAIM", os.environ.get("OAUTH_GROUP_CLAIM", "groups")),
+)
+
+FEISHU_CLIENT_ID = PersistentConfig(
+    "FEISHU_CLIENT_ID",
+    "oauth.feishu.client_id",
+    os.environ.get("FEISHU_CLIENT_ID", ""),
+)
+
+FEISHU_CLIENT_SECRET = PersistentConfig(
+    "FEISHU_CLIENT_SECRET",
+    "oauth.feishu.client_secret",
+    os.environ.get("FEISHU_CLIENT_SECRET", ""),
+)
+
+FEISHU_OAUTH_SCOPE = PersistentConfig(
+    "FEISHU_OAUTH_SCOPE",
+    "oauth.feishu.scope",
+    os.environ.get("FEISHU_OAUTH_SCOPE", "contact:user.base:readonly"),
+)
+
+FEISHU_REDIRECT_URI = PersistentConfig(
+    "FEISHU_REDIRECT_URI",
+    "oauth.feishu.redirect_uri",
+    os.environ.get("FEISHU_REDIRECT_URI", ""),
 )
 
 ENABLE_OAUTH_ROLE_MANAGEMENT = PersistentConfig(
@@ -660,7 +686,7 @@ def load_oauth_providers():
 
     if (
         OAUTH_CLIENT_ID.value
-        and OAUTH_CLIENT_SECRET.value
+        and (OAUTH_CLIENT_SECRET.value or OAUTH_CODE_CHALLENGE_METHOD.value)
         and OPENID_PROVIDER_URL.value
     ):
 
@@ -705,6 +731,33 @@ def load_oauth_providers():
             "register": oidc_oauth_register,
         }
 
+    if FEISHU_CLIENT_ID.value and FEISHU_CLIENT_SECRET.value:
+
+        def feishu_oauth_register(client: OAuth):
+            client.register(
+                name="feishu",
+                client_id=FEISHU_CLIENT_ID.value,
+                client_secret=FEISHU_CLIENT_SECRET.value,
+                access_token_url="https://open.feishu.cn/open-apis/authen/v2/oauth/token",
+                authorize_url="https://accounts.feishu.cn/open-apis/authen/v1/authorize",
+                api_base_url="https://open.feishu.cn/open-apis",
+                userinfo_endpoint="https://open.feishu.cn/open-apis/authen/v1/user_info",
+                client_kwargs={
+                    "scope": FEISHU_OAUTH_SCOPE.value,
+                    **(
+                        {"timeout": int(OAUTH_TIMEOUT.value)}
+                        if OAUTH_TIMEOUT.value
+                        else {}
+                    ),
+                },
+                redirect_uri=FEISHU_REDIRECT_URI.value,
+            )
+
+        OAUTH_PROVIDERS["feishu"] = {
+            "register": feishu_oauth_register,
+            "sub_claim": "user_id",
+        }
+
     configured_providers = []
     if GOOGLE_CLIENT_ID.value:
         configured_providers.append("Google")
@@ -712,6 +765,8 @@ def load_oauth_providers():
         configured_providers.append("Microsoft")
     if GITHUB_CLIENT_ID.value:
         configured_providers.append("GitHub")
+    if FEISHU_CLIENT_ID.value:
+        configured_providers.append("Feishu")
 
     if configured_providers and not OPENID_PROVIDER_URL.value:
         provider_list = ", ".join(configured_providers)
@@ -953,6 +1008,9 @@ GEMINI_API_BASE_URL = os.environ.get("GEMINI_API_BASE_URL", "")
 
 if OPENAI_API_BASE_URL == "":
     OPENAI_API_BASE_URL = "https://api.openai.com/v1"
+else:
+    if OPENAI_API_BASE_URL.endswith("/"):
+        OPENAI_API_BASE_URL = OPENAI_API_BASE_URL[:-1]
 
 OPENAI_API_KEYS = os.environ.get("OPENAI_API_KEYS", "")
 OPENAI_API_KEYS = OPENAI_API_KEYS if OPENAI_API_KEYS != "" else OPENAI_API_KEY
@@ -1205,6 +1263,23 @@ USER_PERMISSIONS_CHAT_DELETE = (
     os.environ.get("USER_PERMISSIONS_CHAT_DELETE", "True").lower() == "true"
 )
 
+USER_PERMISSIONS_CHAT_DELETE_MESSAGE = (
+    os.environ.get("USER_PERMISSIONS_CHAT_DELETE_MESSAGE", "True").lower() == "true"
+)
+
+USER_PERMISSIONS_CHAT_CONTINUE_RESPONSE = (
+    os.environ.get("USER_PERMISSIONS_CHAT_CONTINUE_RESPONSE", "True").lower() == "true"
+)
+
+USER_PERMISSIONS_CHAT_REGENERATE_RESPONSE = (
+    os.environ.get("USER_PERMISSIONS_CHAT_REGENERATE_RESPONSE", "True").lower()
+    == "true"
+)
+
+USER_PERMISSIONS_CHAT_RATE_RESPONSE = (
+    os.environ.get("USER_PERMISSIONS_CHAT_RATE_RESPONSE", "True").lower() == "true"
+)
+
 USER_PERMISSIONS_CHAT_EDIT = (
     os.environ.get("USER_PERMISSIONS_CHAT_EDIT", "True").lower() == "true"
 )
@@ -1287,6 +1362,10 @@ DEFAULT_USER_PERMISSIONS = {
         "params": USER_PERMISSIONS_CHAT_PARAMS,
         "file_upload": USER_PERMISSIONS_CHAT_FILE_UPLOAD,
         "delete": USER_PERMISSIONS_CHAT_DELETE,
+        "delete_message": USER_PERMISSIONS_CHAT_DELETE_MESSAGE,
+        "continue_response": USER_PERMISSIONS_CHAT_CONTINUE_RESPONSE,
+        "regenerate_response": USER_PERMISSIONS_CHAT_REGENERATE_RESPONSE,
+        "rate_response": USER_PERMISSIONS_CHAT_RATE_RESPONSE,
         "edit": USER_PERMISSIONS_CHAT_EDIT,
         "share": USER_PERMISSIONS_CHAT_SHARE,
         "export": USER_PERMISSIONS_CHAT_EXPORT,
@@ -1353,6 +1432,14 @@ ENABLE_ADMIN_EXPORT = os.environ.get("ENABLE_ADMIN_EXPORT", "True").lower() == "
 
 ENABLE_ADMIN_WORKSPACE_CONTENT_ACCESS = (
     os.environ.get("ENABLE_ADMIN_WORKSPACE_CONTENT_ACCESS", "True").lower() == "true"
+)
+
+BYPASS_ADMIN_ACCESS_CONTROL = (
+    os.environ.get(
+        "BYPASS_ADMIN_ACCESS_CONTROL",
+        os.environ.get("ENABLE_ADMIN_WORKSPACE_CONTENT_ACCESS", "True"),
+    ).lower()
+    == "true"
 )
 
 ENABLE_ADMIN_CHAT_ACCESS = (
@@ -1857,6 +1944,11 @@ CODE_INTERPRETER_JUPYTER_TIMEOUT = PersistentConfig(
     ),
 )
 
+CODE_INTERPRETER_BLOCKED_MODULES = [
+    library.strip()
+    for library in os.environ.get("CODE_INTERPRETER_BLOCKED_MODULES", "").split(",")
+    if library.strip()
+]
 
 DEFAULT_CODE_INTERPRETER_PROMPT = """
 #### Tools Available
@@ -1961,6 +2053,9 @@ PGVECTOR_INITIALIZE_MAX_VECTOR_LENGTH = int(
     os.environ.get("PGVECTOR_INITIALIZE_MAX_VECTOR_LENGTH", "1536")
 )
 
+PGVECTOR_CREATE_EXTENSION = (
+    os.getenv("PGVECTOR_CREATE_EXTENSION", "true").lower() == "true"
+)
 PGVECTOR_PGCRYPTO = os.getenv("PGVECTOR_PGCRYPTO", "false").lower() == "true"
 PGVECTOR_PGCRYPTO_KEY = os.getenv("PGVECTOR_PGCRYPTO_KEY", None)
 if PGVECTOR_PGCRYPTO and not PGVECTOR_PGCRYPTO_KEY:
@@ -2076,10 +2171,20 @@ ENABLE_ONEDRIVE_INTEGRATION = PersistentConfig(
     os.getenv("ENABLE_ONEDRIVE_INTEGRATION", "False").lower() == "true",
 )
 
-ONEDRIVE_CLIENT_ID = PersistentConfig(
-    "ONEDRIVE_CLIENT_ID",
-    "onedrive.client_id",
-    os.environ.get("ONEDRIVE_CLIENT_ID", ""),
+
+ENABLE_ONEDRIVE_PERSONAL = (
+    os.environ.get("ENABLE_ONEDRIVE_PERSONAL", "True").lower() == "true"
+)
+ENABLE_ONEDRIVE_BUSINESS = (
+    os.environ.get("ENABLE_ONEDRIVE_BUSINESS", "True").lower() == "true"
+)
+
+ONEDRIVE_CLIENT_ID = os.environ.get("ONEDRIVE_CLIENT_ID", "")
+ONEDRIVE_CLIENT_ID_PERSONAL = os.environ.get(
+    "ONEDRIVE_CLIENT_ID_PERSONAL", ONEDRIVE_CLIENT_ID
+)
+ONEDRIVE_CLIENT_ID_BUSINESS = os.environ.get(
+    "ONEDRIVE_CLIENT_ID_BUSINESS", ONEDRIVE_CLIENT_ID
 )
 
 ONEDRIVE_SHAREPOINT_URL = PersistentConfig(
@@ -2192,6 +2297,18 @@ DOCLING_SERVER_URL = PersistentConfig(
     os.getenv("DOCLING_SERVER_URL", "http://docling:5001"),
 )
 
+DOCLING_DO_OCR = PersistentConfig(
+    "DOCLING_DO_OCR",
+    "rag.docling_do_ocr",
+    os.getenv("DOCLING_DO_OCR", "True").lower() == "true",
+)
+
+DOCLING_FORCE_OCR = PersistentConfig(
+    "DOCLING_FORCE_OCR",
+    "rag.docling_force_ocr",
+    os.getenv("DOCLING_FORCE_OCR", "False").lower() == "true",
+)
+
 DOCLING_OCR_ENGINE = PersistentConfig(
     "DOCLING_OCR_ENGINE",
     "rag.docling_ocr_engine",
@@ -2202,6 +2319,24 @@ DOCLING_OCR_LANG = PersistentConfig(
     "DOCLING_OCR_LANG",
     "rag.docling_ocr_lang",
     os.getenv("DOCLING_OCR_LANG", "eng,fra,deu,spa"),
+)
+
+DOCLING_PDF_BACKEND = PersistentConfig(
+    "DOCLING_PDF_BACKEND",
+    "rag.docling_pdf_backend",
+    os.getenv("DOCLING_PDF_BACKEND", "dlparse_v4"),
+)
+
+DOCLING_TABLE_MODE = PersistentConfig(
+    "DOCLING_TABLE_MODE",
+    "rag.docling_table_mode",
+    os.getenv("DOCLING_TABLE_MODE", "accurate"),
+)
+
+DOCLING_PIPELINE = PersistentConfig(
+    "DOCLING_PIPELINE",
+    "rag.docling_pipeline",
+    os.getenv("DOCLING_PIPELINE", "standard"),
 )
 
 DOCLING_DO_PICTURE_DESCRIPTION = PersistentConfig(
@@ -2611,6 +2746,14 @@ WEB_LOADER_ENGINE = PersistentConfig(
     os.environ.get("WEB_LOADER_ENGINE", ""),
 )
 
+
+WEB_LOADER_CONCURRENT_REQUESTS = PersistentConfig(
+    "WEB_LOADER_CONCURRENT_REQUESTS",
+    "rag.web.loader.concurrent_requests",
+    int(os.getenv("WEB_LOADER_CONCURRENT_REQUESTS", "10")),
+)
+
+
 ENABLE_WEB_LOADER_SSL_VERIFICATION = PersistentConfig(
     "ENABLE_WEB_LOADER_SSL_VERIFICATION",
     "rag.web.loader.ssl_verification",
@@ -2623,6 +2766,12 @@ WEB_SEARCH_TRUST_ENV = PersistentConfig(
     os.getenv("WEB_SEARCH_TRUST_ENV", "False").lower() == "true",
 )
 
+
+OLLAMA_CLOUD_WEB_SEARCH_API_KEY = PersistentConfig(
+    "OLLAMA_CLOUD_WEB_SEARCH_API_KEY",
+    "rag.web.search.ollama_cloud_api_key",
+    os.getenv("OLLAMA_CLOUD_API_KEY", ""),
+)
 
 SEARXNG_QUERY_URL = PersistentConfig(
     "SEARXNG_QUERY_URL",
@@ -3052,6 +3201,12 @@ IMAGES_OPENAI_API_BASE_URL = PersistentConfig(
     "image_generation.openai.api_base_url",
     os.getenv("IMAGES_OPENAI_API_BASE_URL", OPENAI_API_BASE_URL),
 )
+IMAGES_OPENAI_API_VERSION = PersistentConfig(
+    "IMAGES_OPENAI_API_VERSION",
+    "image_generation.openai.api_version",
+    os.getenv("IMAGES_OPENAI_API_VERSION", ""),
+)
+
 IMAGES_OPENAI_API_KEY = PersistentConfig(
     "IMAGES_OPENAI_API_KEY",
     "image_generation.openai.api_key",
