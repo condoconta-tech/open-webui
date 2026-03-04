@@ -1,25 +1,33 @@
 <script lang="ts">
-	import * as XLSX from 'xlsx';
+	import type { WorkBook } from 'xlsx';
+	import DOMPurify from 'dompurify';
 
 	import { getContext, onMount, tick } from 'svelte';
 
 	import { formatFileSize, getLineCount } from '$lib/utils';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { settings } from '$lib/stores';
 	import { getKnowledgeById } from '$lib/apis/knowledge';
-	import { getFileById } from '$lib/apis/files';
+	import { getFileById, getFileContentById } from '$lib/apis/files';
 
 	import CodeBlock from '$lib/components/chat/Messages/CodeBlock.svelte';
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
 
 	const i18n = getContext('i18n');
 
+	const CONTENT_PREVIEW_LIMIT = 10000;
+	let expandedContent = false;
+
 	import Modal from './Modal.svelte';
 	import XMark from '../icons/XMark.svelte';
-	import Info from '../icons/Info.svelte';
 	import Switch from './Switch.svelte';
 	import Tooltip from './Tooltip.svelte';
 	import dayjs from 'dayjs';
 	import Spinner from './Spinner.svelte';
+	import PDFViewer from './PDFViewer.svelte';
+	import Reset from '../icons/Reset.svelte';
+
+	import panzoom, { type PanZoom } from 'panzoom';
 
 	export let item;
 	export let show = false;
@@ -30,15 +38,33 @@
 
 	let isPDF = false;
 	let isAudio = false;
+	let isImage = false;
 	let isExcel = false;
 
 	let selectedTab = '';
-	let excelWorkbook: XLSX.WorkBook | null = null;
+	let excelWorkbook: WorkBook | null = null;
 	let excelSheetNames: string[] = [];
 	let selectedSheet = '';
 	let excelHtml = '';
 	let excelError = '';
 	let rowCount = 0;
+
+	let pzInstance: PanZoom | null = null;
+
+	const initImagePanzoom = (node: HTMLElement) => {
+		pzInstance = panzoom(node, {
+			bounds: true,
+			boundsPadding: 0.1,
+			zoomSpeed: 0.065
+		});
+	};
+
+	const resetImageView = () => {
+		if (pzInstance) {
+			pzInstance.moveTo(0, 0);
+			pzInstance.zoomAbs(0, 0, 1);
+		}
+	};
 
 	$: isPDF =
 		item?.meta?.content_type === 'application/pdf' ||
@@ -79,6 +105,18 @@
 		(item?.name && item?.name.toLowerCase().endsWith('.m4a')) ||
 		(item?.name && item?.name.toLowerCase().endsWith('.webm'));
 
+	$: isImage =
+		(item?.meta?.content_type ?? '').startsWith('image/') ||
+		(item?.name &&
+			(item.name.toLowerCase().endsWith('.png') ||
+				item.name.toLowerCase().endsWith('.jpg') ||
+				item.name.toLowerCase().endsWith('.jpeg') ||
+				item.name.toLowerCase().endsWith('.gif') ||
+				item.name.toLowerCase().endsWith('.webp') ||
+				item.name.toLowerCase().endsWith('.svg') ||
+				item.name.toLowerCase().endsWith('.bmp') ||
+				item.name.toLowerCase().endsWith('.ico')));
+
 	$: isExcel =
 		item?.meta?.content_type === 'application/vnd.ms-excel' ||
 		item?.meta?.content_type ===
@@ -93,43 +131,39 @@
 	const loadExcelContent = async () => {
 		try {
 			excelError = '';
-			const response = await fetch(`${WEBUI_API_BASE_URL}/files/${item.id}/content`, {
-				headers: {
-					Authorization: `Bearer ${localStorage.token}`
-				}
-			});
-
-			if (!response.ok) {
-				throw new Error('Failed to fetch Excel file');
-			}
-
-			const arrayBuffer = await response.arrayBuffer();
-			excelWorkbook = XLSX.read(arrayBuffer, { type: 'array' });
+			const [arrayBuffer, { read }] = await Promise.all([
+				getFileContentById(item.id),
+				import('xlsx')
+			]);
+			excelWorkbook = read(arrayBuffer, { type: 'array' });
 			excelSheetNames = excelWorkbook.SheetNames;
 
 			if (excelSheetNames.length > 0) {
 				selectedSheet = excelSheetNames[0];
-				renderExcelSheet();
+				await renderExcelSheet();
 			}
 		} catch (error) {
 			console.error('Error loading Excel/CSV file:', error);
-			excelError = 'Failed to load Excel/CSV file. Please try downloading it instead.';
+			excelError = $i18n.t('Failed to load Excel/CSV file. Please try downloading it instead.');
 		}
 	};
 
-	const renderExcelSheet = () => {
+	const renderExcelSheet = async () => {
 		if (!excelWorkbook || !selectedSheet) return;
 
 		const worksheet = excelWorkbook.Sheets[selectedSheet];
 		// Calculate row count
+		const XLSX = await import('xlsx');
 		const range = XLSX.utils.decode_range(worksheet['!ref'] || 'A1:A1');
 		rowCount = range.e.r - range.s.r + 1;
 
-		excelHtml = XLSX.utils.sheet_to_html(worksheet, {
-			id: 'excel-table',
-			editable: false,
-			header: ''
-		});
+		excelHtml = DOMPurify.sanitize(
+			XLSX.utils.sheet_to_html(worksheet, {
+				id: 'excel-table',
+				editable: false,
+				header: ''
+			})
+		);
 	};
 
 	$: if (selectedSheet && excelWorkbook) {
@@ -138,6 +172,7 @@
 
 	const loadContent = async () => {
 		selectedTab = '';
+		expandedContent = false;
 		if (item?.type === 'collection') {
 			loading = true;
 
@@ -182,6 +217,10 @@
 		if (item?.context === 'full') {
 			enableFullContent = true;
 		}
+
+		return () => {
+			pzInstance?.dispose();
+		};
 	});
 </script>
 
@@ -345,15 +384,93 @@
 					</div>
 				{/if}
 
-				{#if selectedTab === ''}
+				{#if isImage}
+					<div class="relative w-full max-h-[70vh] overflow-hidden">
+						<div class="absolute top-2 right-2 z-10">
+							<Tooltip content={$i18n.t('Reset view')}>
+								<button
+									class="p-1.5 rounded-lg bg-white/80 dark:bg-gray-850/80 backdrop-blur-sm shadow-sm hover:bg-gray-100 dark:hover:bg-gray-800 transition text-gray-500 dark:text-gray-400"
+									on:click={resetImageView}
+								>
+									<Reset className="size-4" />
+								</button>
+							</Tooltip>
+						</div>
+						<div use:initImagePanzoom>
+							<img
+								src={`${WEBUI_API_BASE_URL}/files/${item.id}/content`}
+								alt={item?.name ?? 'Image'}
+								class="w-full object-contain rounded-lg"
+								loading="lazy"
+								draggable="false"
+							/>
+						</div>
+					</div>
+				{:else if selectedTab === ''}
 					{#if item?.file?.data}
-						<div class="max-h-96 overflow-scroll scrollbar-hidden text-xs whitespace-pre-wrap">
-							{(item?.file?.data?.content ?? '').trim() || 'No content'}
-						</div>
+						{@const rawContent = (item?.file?.data?.content ?? '').trim() || 'No content'}
+						{@const isTruncated =
+							($settings?.renderMarkdownInPreviews ?? true) &&
+							rawContent.length > CONTENT_PREVIEW_LIMIT &&
+							!expandedContent}
+						{#if $settings?.renderMarkdownInPreviews ?? true}
+							<div
+								class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
+							>
+								<Markdown
+									content={isTruncated ? rawContent.slice(0, CONTENT_PREVIEW_LIMIT) : rawContent}
+									id="file-preview"
+								/>
+							</div>
+							{#if isTruncated}
+								<button
+									class="mt-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition"
+									on:click={() => {
+										expandedContent = true;
+									}}
+								>
+									{$i18n.t('Show all ({{COUNT}} characters)', {
+										COUNT: rawContent.length.toLocaleString()
+									})}
+								</button>
+							{/if}
+						{:else}
+							<div class="max-h-96 overflow-scroll scrollbar-hidden text-xs whitespace-pre-wrap">
+								{rawContent}
+							</div>
+						{/if}
 					{:else if item?.content}
-						<div class="max-h-96 overflow-scroll scrollbar-hidden text-xs whitespace-pre-wrap">
-							{(item?.content ?? '').trim() || 'No content'}
-						</div>
+						{@const rawContent = (item?.content ?? '').trim() || 'No content'}
+						{@const isTruncated =
+							($settings?.renderMarkdownInPreviews ?? true) &&
+							rawContent.length > CONTENT_PREVIEW_LIMIT &&
+							!expandedContent}
+						{#if $settings?.renderMarkdownInPreviews ?? true}
+							<div
+								class="max-h-96 overflow-scroll scrollbar-hidden text-sm prose dark:prose-invert max-w-full"
+							>
+								<Markdown
+									content={isTruncated ? rawContent.slice(0, CONTENT_PREVIEW_LIMIT) : rawContent}
+									id="file-preview-content"
+								/>
+							</div>
+							{#if isTruncated}
+								<button
+									class="mt-1 text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition"
+									on:click={() => {
+										expandedContent = true;
+									}}
+								>
+									{$i18n.t('Show all ({{COUNT}} characters)', {
+										COUNT: rawContent.length.toLocaleString()
+									})}
+								</button>
+							{/if}
+						{:else}
+							<div class="max-h-96 overflow-scroll scrollbar-hidden text-xs whitespace-pre-wrap">
+								{rawContent}
+							</div>
+						{/if}
 					{/if}
 				{:else if selectedTab === 'preview'}
 					{#if isAudio}
@@ -364,10 +481,9 @@
 							playsinline
 						/>
 					{:else if isPDF}
-						<iframe
-							title={item?.name}
-							src={`${WEBUI_API_BASE_URL}/files/${item.id}/content`}
-							class="w-full h-[70vh] border-0 rounded-lg"
+						<PDFViewer
+							url={`${WEBUI_API_BASE_URL}/files/${item.id}/content`}
+							className="w-full h-[70vh] border-0 rounded-lg"
 						/>
 					{:else if isExcel}
 						{#if excelError}
