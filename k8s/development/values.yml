@@ -17,7 +17,7 @@ image:
   # tag: '18b631a115280c8279b7401b60a02ae60166d92a'
 websocket:
   redis:
-    enabled: false
+    enabled: true
 nodeSelector:
   condoconta.node.type: webui
 databaseUrl: 'postgresql://ollama:ollama@localhost/ollama'
