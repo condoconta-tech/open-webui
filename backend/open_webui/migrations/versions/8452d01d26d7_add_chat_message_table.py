@@ -26,30 +26,27 @@ BATCH_SIZE = 5000
 
 def _flush_batch(conn, table, batch):
     """
-    Insert a batch of messages, falling back to row-by-row on error.
-
-    Tries a single bulk insert first (fast path). If that fails (e.g. due to
-    a duplicate key), falls back to individual inserts wrapped in savepoints
-    so the rest of the batch can still succeed.
+    Insert a batch of messages in its own transaction, falling back to
+    row-by-row on error. Each batch commits independently so progress is
+    durable across pod restarts.
     """
-    savepoint = conn.begin_nested()
+    tx = conn.begin()
     try:
         conn.execute(sa.insert(table), batch)
-        savepoint.commit()
+        tx.commit()
         return len(batch), 0
     except Exception:
-        savepoint.rollback()
-        # Batch failed - insert one-by-one to isolate the bad row(s)
+        tx.rollback()
         inserted = 0
         failed = 0
         for msg in batch:
-            sp = conn.begin_nested()
+            row_tx = conn.begin()
             try:
                 conn.execute(sa.insert(table).values(**msg))
-                sp.commit()
+                row_tx.commit()
                 inserted += 1
             except Exception as e:
-                sp.rollback()
+                row_tx.rollback()
                 failed += 1
                 log.warning(f'Failed to insert message {msg["id"]}: {e}')
         return inserted, failed
@@ -84,9 +81,16 @@ def upgrade() -> None:
     op.create_index('chat_message_model_created_idx', 'chat_message', ['model_id', 'created_at'])
     op.create_index('chat_message_user_created_idx', 'chat_message', ['user_id', 'created_at'])
 
-    # Step 2: Backfill from existing chats
-    conn = op.get_bind()
+    # Step 2: Backfill from existing chats.
+    #
+    # Run in autocommit_block so batches commit as we go. Without this the
+    # whole backfill is one transaction: WAL/undo/locks grow unbounded, pod
+    # OOMs mid-migration, rollback discards all progress, restart repeats.
+    with op.get_context().autocommit_block():
+        _backfill(op.get_bind())
 
+
+def _backfill(conn) -> None:
     chat_table = sa.table(
         'chat',
         sa.column('id', sa.Text()),
@@ -115,13 +119,22 @@ def upgrade() -> None:
         sa.column('updated_at', sa.BigInteger()),
     )
 
+    # Skip chats already backfilled (restart-safe).
+    processed_chat_ids = {
+        r[0] for r in conn.execute(
+            sa.text('SELECT DISTINCT chat_id FROM chat_message')
+        )
+    }
+    if processed_chat_ids:
+        log.info(f'Resuming: {len(processed_chat_ids)} chats already backfilled, skipping.')
+
     # Stream rows instead of loading all into memory:
     # - yield_per: fetches rows in chunks via cursor.fetchmany() (all backends)
     # - stream_results: enables server-side cursors on PostgreSQL (no-op on SQLite)
     result = conn.execute(
         sa.select(chat_table.c.id, chat_table.c.user_id, chat_table.c.chat)
         .where(~chat_table.c.user_id.like('shared-%'))
-        .execution_options(yield_per=1000, stream_results=True)
+        .execution_options(yield_per=100, stream_results=True)
     )
 
     now = int(time.time())
@@ -133,6 +146,9 @@ def upgrade() -> None:
         chat_id = chat_row[0]
         user_id = chat_row[1]
         chat_data = chat_row[2]
+
+        if chat_id in processed_chat_ids:
+            continue
 
         if not chat_data:
             continue
