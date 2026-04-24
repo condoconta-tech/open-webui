@@ -16,6 +16,7 @@ image:
   repository: '412781486721.dkr.ecr.us-east-1.amazonaws.com/open-webui'
   # tag: '18b631a115280c8279b7401b60a02ae60166d92a'
 websocket:
+  manager: ""
   redis:
     enabled: false
 nodeSelector:
