@@ -290,15 +290,18 @@ class AppConfig:
     ):
         if redis_url:
             super().__setattr__('_redis_key_prefix', redis_key_prefix)
-            super().__setattr__(
-                '_redis',
-                get_redis_connection(
+            try:
+                conn = get_redis_connection(
                     redis_url,
                     redis_sentinels,
                     redis_cluster,
                     decode_responses=True,
-                ),
-            )
+                )
+                conn.ping()
+                super().__setattr__('_redis', conn)
+            except Exception as e:
+                log.warning(f'Redis unavailable, running without it: {e}')
+                super().__setattr__('_redis', None)
 
         super().__setattr__('_state', {})
 
