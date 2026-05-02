@@ -1,0 +1,24 @@
+apiVersion: networking.istio.io/v1
+kind: Gateway
+metadata:
+  name: open-webui-ingress-gateway
+spec:
+  selector:
+    istio: ingressprivategateway
+  servers:
+  - hosts:
+    - ai.condoconta.info
+    port:
+      name: http
+      number: 80
+      protocol: HTTP
+  - hosts:
+    - ai.condoconta.info
+    port:
+      name: https
+      number: 443
+      protocol: HTTPS
+    tls:
+      credentialName: open-webbui-pro-api-cert
+      httpsRedirect: true
+      mode: SIMPLE

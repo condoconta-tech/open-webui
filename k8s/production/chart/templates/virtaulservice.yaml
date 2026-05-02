@@ -1,0 +1,18 @@
+apiVersion: networking.istio.io/v1
+kind: VirtualService
+metadata:
+  name: open-webui-virtual-service
+spec:
+  gateways:
+  - open-webui-ingress-gateway
+  hosts:
+  - ai.condoconta.info
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: open-webui
+        port:
+          number: 80
