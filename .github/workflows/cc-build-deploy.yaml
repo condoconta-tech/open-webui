@@ -1,56 +1,36 @@
-name: Build and Deploy to EC2
-
+name: Condosuite Temp - Deploy
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        required: true
+        type: choice
+        options:
+          - DEV
+          - PRO
+
+permissions:
+  id-token: write
+  actions: read
+  contents: read
 
 jobs:
-  build-image:
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Configure AWS Credentials
-      uses: aws-actions/configure-aws-credentials@v4
-      with:
-        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
-        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-
-    - name: Log in to Amazon ECR
-      id: login-ecr
-      uses: aws-actions/amazon-ecr-login@v2
-
-    - name: Build, tag, and push image to ECR
-      env:
-        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-        IMAGE_TAG: ${{ github.sha }}
-      run: |
-        docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
-        docker tag $ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG     
+  build:
+    uses: condoconta-tech/githubworkflows/.github/workflows/build.yaml@v0.0.7
+    with:
+      image: is-condosuite-temp
+      dockerfile: docker/Dockerfile.prod-single
+    secrets:
+      aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
   deploy:
-    needs: build-image
-    environment: main
-    runs-on: ubuntu-latest
-    steps:
-        - uses: actions/checkout@v4
-        - name: Configure AWS Credentials
-          uses: aws-actions/configure-aws-credentials@v4
-          with:
-            aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-            aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
-            aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        - run: aws eks update-kubeconfig --region us-east-1 --name ${{ vars.EKS_CLUSTER_NAME }}
-        - uses: azure/setup-helm@v4.3.0
-          with:
-            version: 'v3.13.1'
-        - name: Deploy to Kubernetes
-          run: |
-            helm repo add open-webui https://open-webui.github.io/helm-charts
-            helm repo update
-            helm upgrade open-webui open-webui/open-webui -f k8s/development/values.yml -n open-webui --set image.tag=${{ github.sha }} --set databaseUrl=${{ secrets.DATABASE_URL }} --force
+    needs: [build]
+    uses: condoconta-tech/githubworkflows/.github/workflows/deploy.yaml@v0.0.7
+    with:
+      deploy-name: open-webui
+      namespace: open-webui
+      values-path: k8s
+      env:  ${{ inputs.environment }}
+      tag: ${{ needs.build.outputs.tag }}
+    secrets:
+      aws-region: ${{ secrets.AWS_DEFAULT_REGION }}
